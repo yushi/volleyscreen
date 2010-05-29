@@ -1,0 +1,181 @@
+#!/usr/bin/env ruby
+# -*- coding: utf-8 -*-
+require 'pp'
+require 'yaml'
+
+class Array
+  def string_only?
+    return self.find_all{|e| e.class != String}.size == 0
+  end
+
+  def array_included?
+    return self.find_all{|e| e.class == Array}.size > 0
+  end
+
+  def nested_join_with_escape(depth = nil)
+    depth = depth ? depth+1 : 0
+    
+    escape_char = '\\'
+    quote = '"'
+    esc = escape_char * escape_num(depth) + quote
+    self.map!{|e| 
+      if e.class == Array
+        if array_included?
+          e.nested_join_with_escape(depth)
+        end
+        e = esc + e.join(' ') + esc
+      end
+
+      e  = e.get_cmd_str if e.class != String
+      e
+    }
+    self.join(' ')
+  end
+end
+
+module VolleyScreen
+  class TerminalUtil
+    def self.clear
+      print "\033[2J"
+      printf("\033[%d;%dH",0,0)
+    end
+
+    def self.select_from_list(list)
+      self.clear
+
+      selected = nil
+      while selected == nil
+        list.each_with_index{|l, idx|
+          puts "#{idx}\t#{l}"
+        }
+        print "select number > "
+        num = gets.chomp
+        if num =~ /\d+/
+          num = num.to_i
+          selected = list[num] if list[num]
+        end
+        self.clear
+      end
+      
+
+      return selected
+    end
+  end
+
+  class ShellCommand
+    def initialize(cmd = [])
+      @cmd = cmd
+    end
+    
+    def get_cmd_str
+      return @cmd
+    end
+  end
+
+  class ShellCommandSSH
+    def initialize(user, host, ssh )
+      @ssh = ssh ? ssh : 'ssh -t'
+      @user = user
+      @host = host
+    end
+    
+    def get_cmd_str
+      return "#{@ssh} #{@user}@#{@host}" if @user
+      return "#{@ssh} #{@host}" 
+    end
+  end
+
+  class GNUScreen
+    def self.get_session_list
+      screens = `screen -ls`.split("\n").find_all{|e| e =~ /^\t/}
+      screens.map{|e|
+        e =~ /^\t([^\t]*)\t/
+        $1
+      }
+    end
+
+    def initialize(session_name)
+      @session_name = session_name
+    end
+
+    def create_new_window(title, cmd)
+      screen_cmd = [ShellCommand.new("screen -S #{@session_name} -X screen"), 
+                    [ShellCommand.new("/bin/sh -c"),
+                     [ShellCommand.new("screen -X title #{title};"), *cmd ]
+                    ]
+                   ]
+      screen_cmd = screen_cmd.nested_join_with_escape
+      puts screen_cmd
+      fork{ 
+        exec(screen_cmd)
+      }
+    end
+  end
+
+  class Setting
+    def initialize(filename)
+      @setting = YAML::load_file(filename)
+    end
+
+    def groups
+      return @setting.keys.sort
+    end
+    
+    def group(group_name)
+      p @setting[group_name]
+      @setting[group_name]
+    end
+  end
+end
+
+def escape_num(n)
+  if n ==  0
+    return 0
+  elsif n == 1
+    return 1
+  else
+    return escape_num(n - 1) * 2 + 1
+  end
+end
+
+
+def open_screen_by_group(target_screen, group)
+  screen = VolleyScreen::GNUScreen.new(target_screen)
+  group.keys.sort.each{|label|
+    entries = []
+    group[label].each{|s|
+      case s['type']
+      when 'ssh'
+        entries << VolleyScreen::ShellCommandSSH.new(s['user'], s['host'], s['ssh'])
+      when 'exec'
+        entries << VolleyScreen::ShellCommand.new(s['cmd'])
+      end
+    }
+    cmd = nil
+    entries.reverse.each_with_index{ |s, idx|
+      if cmd == nil
+        cmd = [s]
+      else
+        cmd = [s, cmd]
+      end
+    }
+    screen.create_new_window(label, cmd)
+    sleep 0.1
+  }
+end
+
+
+
+include VolleyScreen
+
+begin
+  setting = Setting.new("#{ENV['HOME']}/.volleyscreen.yaml")
+  target_screen = TerminalUtil::select_from_list(GNUScreen::get_session_list)
+  group = TerminalUtil::select_from_list(setting.groups)
+rescue Interrupt
+  puts "\nuser stopped"
+  exit
+end
+
+open_screen_by_group(target_screen, setting.group(group))
+

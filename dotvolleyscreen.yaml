@@ -1,0 +1,9 @@
+example:
+  top:
+    - type: exec
+      cmd: "top"
+  ssh_and_top:
+    - type: ssh
+      host: localhost
+    - type: exec
+      cmd: "top"
