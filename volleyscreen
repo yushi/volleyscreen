@@ -99,10 +99,9 @@ module VolleyScreen
     end
 
     def create_new_window(title, cmd)
-      screen_cmd = [ShellCommand.new("screen -S #{@session_name} -X screen"), 
-                    [ShellCommand.new("/bin/sh -c"),
-                     [ShellCommand.new("screen -X title #{title};"), *cmd ]
-                    ]
+      screen_cmd = [
+                    ShellCommand.new("screen -S #{@session_name} -X screen -t #{title}"), 
+                    *cmd 
                    ]
       screen_cmd = screen_cmd.nested_join_with_escape
       puts screen_cmd
@@ -118,7 +117,8 @@ module VolleyScreen
     end
 
     def groups
-      return @setting.keys.sort
+      ret = @setting.keys.find_all{|e| e =~ /^[^_]+/ }
+      return ret.sort
     end
     
     def group(group_name)
