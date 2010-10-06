@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 require 'pp'
 require 'yaml'
+require 'optparse'
 
 class Array
   def string_only?
@@ -56,13 +57,13 @@ module VolleyScreen
         end
         self.clear
       end
-      
 
       return selected
     end
   end
 
   class ShellCommand
+    attr_reader :num
     def initialize(cmd = [])
       @cmd = cmd
     end
@@ -73,7 +74,8 @@ module VolleyScreen
   end
 
   class ShellCommandSSH
-    def initialize(user, host, ssh )
+    attr_reader :num
+    def initialize(user, host, ssh)
       @ssh = ssh ? ssh : 'ssh -t'
       @user = user
       @host = host
@@ -98,15 +100,44 @@ module VolleyScreen
       @session_name = session_name
     end
 
-    def create_new_window(title, cmd)
+    def create_new_window(title, cmd, num)
+      cmd_string = 'screen'
+      cmd_string += " -S #{@session_name}" if @session_name
+      cmd_string += " -X screen -t #{title}"
+      cmd_string += " #{num}" if num
+
       screen_cmd = [
-                    ShellCommand.new("screen -S #{@session_name} -X screen -t #{title}"), 
+                    ShellCommand.new(cmd_string),
                     *cmd 
                    ]
       screen_cmd = screen_cmd.nested_join_with_escape
       puts screen_cmd
       fork{ 
         exec(screen_cmd)
+      }
+    end
+  end
+
+  class TMUX
+    def self.get_session_list
+    end
+    
+    def initialize(session_name)
+      @session_name = session_name
+    end
+
+    def create_new_window(title, cmd, num)
+      tmux_cmd = [
+                  ShellCommand.new("tmux new-window -n #{title}"),
+                  cmd
+                 ]
+      tmux_cmd << ShellCommand.new("; tmux move-window -t #{num}") if num
+
+      tmux_cmd = tmux_cmd.nested_join_with_escape
+
+      p tmux_cmd
+      fork{ 
+        exec(tmux_cmd)
       }
     end
   end
@@ -140,7 +171,7 @@ end
 
 
 def open_screen_by_group(target_screen, group)
-  screen = VolleyScreen::GNUScreen.new(target_screen)
+  screen = $TOOL_CLASS.new(target_screen)
   group.keys.sort.each{|label|
     entries = []
     group[label].each{|s|
@@ -159,23 +190,39 @@ def open_screen_by_group(target_screen, group)
         cmd = [s, cmd]
       end
     }
-    screen.create_new_window(label, cmd)
+    num = label.scan(/\d+$/)[0] || nil
+    screen.create_new_window(label, cmd, num)
     sleep 0.1
   }
 end
 
 
-
-include VolleyScreen
-
-begin
-  setting = Setting.new("#{ENV['HOME']}/.volleyscreen.yaml")
-  target_screen = TerminalUtil::select_from_list(GNUScreen::get_session_list)
-  group = TerminalUtil::select_from_list(setting.groups)
-rescue Interrupt
-  puts "\nuser stopped"
-  exit
+if ENV['TMUX']
+  $TOOL_CLASS = VolleyScreen::TMUX
+else
+  $TOOL_CLASS = VolleyScreen::GNUScreen
 end
 
-open_screen_by_group(target_screen, setting.group(group))
 
+def main(config, args)
+  include VolleyScreen
+
+  begin
+    setting = Setting.new("#{ENV['HOME']}/.volleyscreen.yaml")
+    target_screen = nil
+    target_screen = TerminalUtil::select_from_list($TOOL_CLASS::get_session_list) if config[:session]
+    group = TerminalUtil::select_from_list(setting.groups)
+  rescue Interrupt
+    puts "\nuser stopped"
+    exit
+  end
+  
+  open_screen_by_group(target_screen, setting.group(group))
+end
+
+config = { }
+opts = OptionParser.new
+opts.on("-s", "select session"){|v| config[:session] = true }
+opts.parse!(ARGV)
+
+main(config, ARGV)
